@@ -1,66 +1,372 @@
-import Image from "next/image";
+"use client";
+
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Html5Qrcode, Html5QrcodeScannerState } from "html5-qrcode";
+
+interface Activity {
+  event_id: string;
+  activity_name: string;
+}
+
+interface ScanResponse {
+  status: number;
+  data?: { user?: Record<string, unknown> } & Record<string, unknown>;
+  error?: string;
+  message?: string;
+  details?: unknown;
+}
+
+interface CameraInfo {
+  id: string;
+  label: string;
+}
+
+// Cooldown after a successful scan to keep the camera from firing the same
+// QR again before the operator has had a chance to look at the result.
+const RESCAN_COOLDOWN_MS = 2500;
+
+// State-guarded teardown. `Html5Qrcode.stop()` and `.clear()` *throw
+// synchronously* (not reject) when the scanner isn't in a state that allows
+// them — which is exactly what happens on the first React StrictMode
+// cleanup, before start() has resolved. This helper swallows those throws
+// and never lets them escape as uncaught errors.
+async function teardownScanner(scanner: Html5Qrcode): Promise<void> {
+  try {
+    const state = scanner.getState();
+    if (
+      state === Html5QrcodeScannerState.SCANNING ||
+      state === Html5QrcodeScannerState.PAUSED
+    ) {
+      await scanner.stop();
+    }
+  } catch {
+    // stop() failed (e.g. mid-initialisation); fall through to clear().
+  }
+  try {
+    if (scanner.getState() === Html5QrcodeScannerState.NOT_STARTED) {
+      scanner.clear();
+    }
+  } catch {
+    // clear() can also throw on a half-initialised scanner; nothing else
+    // we can safely do here.
+  }
+}
 
 export default function Home() {
+  const [activities, setActivities] = useState<Activity[]>([]);
+  const [selectedEventId, setSelectedEventId] = useState<string>("");
+  const [cameras, setCameras] = useState<CameraInfo[]>([]);
+  const [selectedCameraId, setSelectedCameraId] = useState<string>("");
+  const [cameraReady, setCameraReady] = useState(false);
+  const [cameraError, setCameraError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [scanResponse, setScanResponse] =
+    useState<ScanResponse | null>(null);
+
+  // Tracks whether a scan is currently in flight so the QR callback can be a
+  // no-op until the cooldown / restart completes.
+  const scanInFlightRef = useRef(false);
+
+  // Load the local event list once on mount.
+  useEffect(() => {
+    const fetchActivities = async () => {
+      try {
+        const response = await fetch("/api/events");
+        if (!response.ok) {
+          throw new Error(`Failed to load events (${response.status})`);
+        }
+        const data = (await response.json()) as Activity[];
+        setActivities(data);
+        if (data.length > 0) {
+          setSelectedEventId(data[0].event_id);
+        }
+      } catch (error) {
+        console.error("Error loading events:", error);
+        setCameraError(
+          error instanceof Error
+            ? error.message
+            : "Could not load the event list.",
+        );
+      }
+    };
+    fetchActivities();
+  }, []);
+
+  // Open / re-open the camera whenever the event or the chosen device changes.
+  // The scanner is owned by this effect — the cleanup awaits stop()+clear() so
+  // the next start() never races a still-running track.
+  useEffect(() => {
+    if (!selectedEventId) return;
+
+    let scanner: Html5Qrcode | null = null;
+    let cancelled = false;
+
+    const startScanner = async () => {
+      setCameraReady(false);
+      setCameraError(null);
+
+      try {
+        scanner = new Html5Qrcode("qr-reader");
+      } catch (error) {
+        console.error("Scanner construction failed:", error);
+        setCameraError("Unable to initialise the QR scanner.");
+        return;
+      }
+
+      try {
+        // Enumerate devices once we have permission (the prompt is triggered
+        // by the start() call below). If multiple are reported, surface them
+        // in the picker.
+        const devices = await Html5Qrcode.getCameras().catch(() => []);
+        if (cancelled) return;
+        if (devices.length > 0) {
+          setCameras(devices);
+          // If the previously selected camera disappeared, fall back to the
+          // first available device.
+          setSelectedCameraId((current) => {
+            if (current && devices.some((d) => d.id === current)) {
+              return current;
+            }
+            return devices[0].id;
+          });
+        }
+
+        const cameraConfig = selectedCameraId
+          ? { deviceId: { exact: selectedCameraId } }
+          : { facingMode: "environment" };
+
+        await scanner.start(
+          cameraConfig,
+          { fps: 10, qrbox: { width: 250, height: 250 }, aspectRatio: 1.0 },
+          onScanSuccess,
+          () => {
+            // Per-frame decode failure — keep the stream open.
+          },
+        );
+
+        if (cancelled) {
+          // Tear down the just-started scanner using the same state-guarded
+          // helper as the effect cleanup.
+          await teardownScanner(scanner);
+          return;
+        }
+        setCameraReady(true);
+      } catch (error) {
+        console.error("Camera init failed:", error);
+        if (!cancelled) {
+          setCameraError(
+            "Unable to open the camera. Check browser permissions and reload.",
+          );
+        }
+      }
+    };
+
+    startScanner();
+
+    return () => {
+      cancelled = true;
+      if (!scanner) return;
+      void teardownScanner(scanner);
+    };
+    // The scanner is restarted on event or camera change. onScanSuccess is
+    // stable via useCallback below, so it's not in the dep list.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedEventId, selectedCameraId]);
+
+  const onScanSuccess = useCallback(
+    async (decodedText: string) => {
+      if (scanInFlightRef.current) return;
+      scanInFlightRef.current = true;
+      setSubmitting(true);
+
+      try {
+        const response = await fetch("/api/scan", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            qr_token: decodedText,
+            event_id: selectedEventId,
+          }),
+        });
+
+        const body = (await response.json().catch(() => ({}))) as ScanResponse;
+        // Normalise: the proxy returns `status` and `data`; mirror that shape so
+        // the renderer only has to read one place.
+        const normalised: ScanResponse = {
+          status: body.status ?? response.status,
+          data: body.data,
+          error: body.error,
+          message: body.message,
+          details: body.details,
+        };
+        setScanResponse(normalised);
+      } catch (error) {
+        setScanResponse({
+          status: 0,
+          error: "NetworkError",
+          message:
+            error instanceof Error
+              ? error.message
+              : "Network request failed.",
+          details: null,
+        });
+      } finally {
+        setSubmitting(false);
+        // After a short pause, allow the next QR to be accepted.
+        window.setTimeout(() => {
+          scanInFlightRef.current = false;
+        }, RESCAN_COOLDOWN_MS);
+      }
+    },
+    [selectedEventId],
+  );
+
+  const userFields = scanResponse?.data?.user;
+  const isSuccess =
+    !!scanResponse && scanResponse.status >= 200 && scanResponse.status < 300;
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <h1>QR Scanner</h1>
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
+    <main className="flex flex-col h-full p-6 gap-6">
+      <header className="text-center">
+        <h1 className="text-2xl font-bold mb-4 text-white">
+          QR Attendance Checker
+        </h1>
+      </header>
+
+      <div className="flex flex-col gap-4">
+        <div>
+          <label className="block text-sm font-semibold text-yellow-400 mb-2">
+            Select Event
+          </label>
+          <select
+            value={selectedEventId}
+            onChange={(e) => setSelectedEventId(e.target.value)}
+            className="w-full px-4 py-2 bg-gray-700 text-white border border-gray-500 rounded focus:outline-none focus:border-yellow-400"
           >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
+            <option value="">-- Choose an event --</option>
+            {activities.map((activity) => (
+              <option key={activity.event_id} value={activity.event_id}>
+                {activity.activity_name}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {cameras.length > 1 && (
+          <div>
+            <label className="block text-sm font-semibold text-yellow-400 mb-2">
+              Camera
+            </label>
+            <select
+              value={selectedCameraId}
+              onChange={(e) => setSelectedCameraId(e.target.value)}
+              className="w-full px-4 py-2 bg-gray-700 text-white border border-gray-500 rounded focus:outline-none focus:border-yellow-400"
+            >
+              {cameras.map((camera) => (
+                <option key={camera.id} value={camera.id}>
+                  {camera.label || `Camera ${camera.id.slice(0, 6)}`}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+      </div>
+
+      <div className="flex-1 flex items-center justify-center bg-black rounded overflow-hidden">
+        <div id="qr-reader" style={{ width: "100%" }}></div>
+      </div>
+
+      {cameraError && (
+        <div className="p-4 rounded bg-red-700 text-white text-center">
+          <p className="font-semibold">{cameraError}</p>
+        </div>
+      )}
+
+      {!cameraReady && !cameraError && (
+        <div className="p-4 rounded bg-gray-700 text-white text-center">
+          <p>Opening camera…</p>
+        </div>
+      )}
+
+      {submitting && (
+        <div className="p-4 rounded bg-gray-700 text-white text-center">
+          <p>Submitting scan…</p>
+        </div>
+      )}
+
+      {scanResponse && !submitting && (
+        <div
+          className={`p-4 rounded text-white ${
+            isSuccess ? "bg-green-700" : "bg-red-700"
+          }`}
+        >
+          {isSuccess ? (
+            <SuccessView
+              user={userFields ?? {}}
+              raw={scanResponse.data ?? {}}
             />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+          ) : (
+            <ErrorView response={scanResponse} />
+          )}
         </div>
-      </main>
+      )}
+    </main>
+  );
+}
+
+function SuccessView({
+  user,
+  raw,
+}: {
+  user: Record<string, unknown>;
+  raw: Record<string, unknown>;
+}) {
+  // Prefer the `user` object; if the upstream didn't nest it under `user`,
+  // fall back to the whole payload so the operator still sees something.
+  const fields = Object.keys(user).length > 0 ? user : raw;
+
+  return (
+    <div>
+      <p className="font-semibold mb-2">Scan accepted</p>
+      <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-sm">
+        {Object.entries(fields).map(([key, value]) => (
+          <div key={key} className="contents">
+            <dt className="text-gray-200">{key}</dt>
+            <dd className="text-white break-words">{formatValue(value)}</dd>
+          </div>
+        ))}
+      </dl>
     </div>
   );
+}
+
+function ErrorView({ response }: { response: ScanResponse }) {
+  return (
+    <div className="text-center">
+      <p className="font-semibold">
+        Error {response.status} — {response.error ?? "Request failed"}
+      </p>
+      {response.message && typeof response.message === "string" && (
+        <p className="text-sm text-gray-200 mt-1">{response.message}</p>
+      )}
+      {response.details !== undefined && response.details !== null && (
+        <pre className="text-xs text-gray-100 mt-2 text-left whitespace-pre-wrap break-words">
+          {formatValue(response.details)}
+        </pre>
+      )}
+    </div>
+  );
+}
+
+function formatValue(value: unknown): string {
+  if (value === null || value === undefined) return "—";
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
 }
