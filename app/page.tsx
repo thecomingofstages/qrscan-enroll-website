@@ -214,11 +214,23 @@ export default function Home() {
         });
 
         const body = (await response.json().catch(() => ({}))) as ScanResponse;
+        const safeMessage =
+          typeof body.message === "string"
+            ? body.message
+            : body.message != null
+            ? JSON.stringify(body.message)
+            : undefined;
+        const safeError =
+          typeof body.error === "string"
+            ? body.error
+            : body.error != null
+            ? JSON.stringify(body.error)
+            : undefined;
         const normalised: ScanResponse = {
           status: body.status ?? response.status,
           data: body.data,
-          error: body.error,
-          message: body.message,
+          error: safeError,
+          message: safeMessage,
           details: body.details,
         };
         setScanResponse(normalised);
@@ -356,7 +368,7 @@ function SuccessView({
         {Object.entries(fields).map(([key, value]) => (
           <div key={key} className="contents">
             <dt className="text-gray-200">{key}</dt>
-            <dd className="text-white break-words">{formatValue(value)}</dd>
+            <dd className="text-white wrap-break-word">{formatValue(value)}</dd>
           </div>
         ))}
       </dl>
@@ -374,7 +386,7 @@ function ErrorView({ response }: { response: ScanResponse }) {
         <p className="text-sm text-gray-200 mt-1">{response.message}</p>
       )}
       {response.details !== undefined && response.details !== null && (
-        <pre className="text-xs text-gray-100 mt-2 text-left whitespace-pre-wrap break-words">
+        <pre className="text-xs text-gray-100 mt-2 text-left whitespace-pre-wrap wrap-break-word">
           {formatValue(response.details)}
         </pre>
       )}

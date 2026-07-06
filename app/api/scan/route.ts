@@ -1,12 +1,26 @@
 import type { NextRequest } from "next/server";
 
 const BASE_URL = process.env.BASE_URL;
+const API_TOKEN = process.env.API_TOKEN;
 
 if (!BASE_URL) {
   // Surfaced once at module load — easier to spot in dev logs than per-request.
   console.warn(
     "[scan route] BASE_URL is not set. Set it in .env.local (e.g. BASE_URL=https://api.example.com).",
   );
+}
+
+function normalizeResponseField(value: unknown): string | undefined {
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  if (value == null) return undefined;
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
 }
 
 type ScanRequestBody = {
@@ -67,7 +81,10 @@ export async function POST(request: NextRequest) {
   try {
     upstream = await fetch(`${BASE_URL}/events/scan`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        ...(API_TOKEN ? { Authorization: `Bearer ${API_TOKEN}` } : {}),
+      },
       body: JSON.stringify({ qr_token, event_id }),
       // Don't let Next.js cache upstream responses.
       cache: "no-store",
@@ -105,9 +122,15 @@ export async function POST(request: NextRequest) {
   return Response.json(
     {
       status: upstream.status,
-      error: errBody.error ?? upstream.statusText ?? "UpstreamError",
-      message: errBody.message,
-      details: errBody.details ?? parsed,
+      error:
+        normalizeResponseField(errBody.error) ??
+        normalizeResponseField(upstream.statusText) ??
+        "UpstreamError",
+      message: normalizeResponseField(errBody.message),
+      details:
+        normalizeResponseField(errBody.details) ??
+        normalizeResponseField(parsed) ??
+        undefined,
     },
     { status: upstream.status },
   );
