@@ -62,6 +62,7 @@ export default function Home() {
   const [submitting, setSubmitting] = useState(false);
   const [scanResponse, setScanResponse] =
     useState<ScanResponse | null>(null);
+  const [decodedText, setDecodedText] = useState<string | null>(null);
 
   // Tracks whether a scan is currently in flight so the QR callback can be a
   // no-op until the cooldown / restart completes.
@@ -190,6 +191,7 @@ export default function Home() {
         return;
       }
 
+      setDecodedText(decodedText);
       scanInFlightRef.current = true;
       setSubmitting(true);
 
@@ -327,6 +329,13 @@ export default function Home() {
       {submitting && (
         <div className="p-4 rounded bg-gray-700 text-white text-center">
           <p>Submitting scan…</p>
+        </div>
+      )}
+
+      {decodedText && (
+        <div className="p-4 rounded bg-slate-800 text-slate-100 text-sm">
+          <p className="font-semibold">Detected QR content</p>
+          <p className="mt-1 wrap-break-word">{decodedText}</p>
         </div>
       )}
 

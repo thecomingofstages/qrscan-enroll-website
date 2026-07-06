@@ -1,12 +1,23 @@
 import type { NextRequest } from "next/server";
 
 const BASE_URL = process.env.BASE_URL;
-const API_TOKEN = process.env.API_TOKEN;
+const API_TOKEN =
+  process.env.API_TOKEN ??
+  process.env.ADMIN_TOKEN ??
+  process.env.BEARER_TOKEN ??
+  process.env.SCAN_TOKEN ??
+  process.env.SCAN_API_TOKEN;
 
 if (!BASE_URL) {
   // Surfaced once at module load — easier to spot in dev logs than per-request.
   console.warn(
     "[scan route] BASE_URL is not set. Set it in .env.local (e.g. BASE_URL=https://api.example.com).",
+  );
+}
+
+if (!API_TOKEN) {
+  console.warn(
+    "[scan route] API token is not set. Set API_TOKEN or ADMIN_TOKEN in .env.local.",
   );
 }
 
@@ -42,6 +53,18 @@ export async function POST(request: NextRequest) {
         status: 500,
         error: "ConfigurationError",
         details: "BASE_URL is not configured on the server.",
+      },
+      { status: 500 },
+    );
+  }
+
+  if (!API_TOKEN) {
+    return Response.json(
+      {
+        status: 500,
+        error: "ConfigurationError",
+        details:
+          "API token is not configured on the server. Set API_TOKEN, ADMIN_TOKEN, BEARER_TOKEN, SCAN_TOKEN, or SCAN_API_TOKEN in .env.local.",
       },
       { status: 500 },
     );
