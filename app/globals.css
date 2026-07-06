@@ -20,7 +20,7 @@ main {
   width: 600px;
   height: 95%;
   margin : 1% auto;
-  border: 1px solid white;
+  border: 1px solid var(--background);
 }
 
 body {
@@ -56,6 +56,28 @@ button:disabled {
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+/* Override html5-qrcode's inline shaded region styles */
+#qr-reader #qr-shaded-region {
+  border-width: 3rem !important;
+  border-color: rgba(0, 0, 0, 0.6) !important;
+  box-sizing: border-box !important;
+  inset: 0 !important;
+}
+
+#qr-reader #qr-shaded-region > div {
+  background-color: rgba(255, 255, 255, 0.85) !important;
+}
+
+#qr-reader #qr-shaded-region > div:nth-child(-n+4) {
+  width: 50px !important;
+  height: 6px !important;
+}
+
+#qr-reader #qr-shaded-region > div:nth-child(n+5) {
+  width: 6px !important;
+  height: 50px !important;
 }
 
 #qr-reader video {

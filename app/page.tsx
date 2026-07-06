@@ -92,12 +92,10 @@ export default function Home() {
     fetchActivities();
   }, []);
 
-  // Open / re-open the camera whenever the event or the chosen device changes.
-  // The scanner is owned by this effect — the cleanup awaits stop()+clear() so
-  // the next start() never races a still-running track.
+  // Open / re-open the camera whenever the chosen device changes.
+  // The scanner is owned by this effect — the cleanup awaits stop()+clear()
+  // so the next start() never races a still-running track.
   useEffect(() => {
-    if (!selectedEventId) return;
-
     let scanner: Html5Qrcode | null = null;
     let cancelled = false;
 
@@ -137,7 +135,7 @@ export default function Home() {
 
         await scanner.start(
           cameraConfig,
-          { fps: 10, qrbox: { width: 250, height: 250 }, aspectRatio: 1.0 },
+          { fps: 10, qrbox: { width: 320, height: 320 }, aspectRatio: 1.0 },
           onScanSuccess,
           () => {
             // Per-frame decode failure — keep the stream open.
@@ -145,8 +143,6 @@ export default function Home() {
         );
 
         if (cancelled) {
-          // Tear down the just-started scanner using the same state-guarded
-          // helper as the effect cleanup.
           await teardownScanner(scanner);
           return;
         }
@@ -168,10 +164,10 @@ export default function Home() {
       if (!scanner) return;
       void teardownScanner(scanner);
     };
-    // The scanner is restarted on event or camera change. onScanSuccess is
-    // stable via useCallback below, so it's not in the dep list.
+    // The scanner is restarted only when the selected camera changes. We
+    // intentionally do not restart when the selected event changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedEventId, selectedCameraId]);
+  }, [selectedCameraId]);
 
   const onScanSuccess = useCallback(
     async (decodedText: string) => {
@@ -190,8 +186,6 @@ export default function Home() {
         });
 
         const body = (await response.json().catch(() => ({}))) as ScanResponse;
-        // Normalise: the proxy returns `status` and `data`; mirror that shape so
-        // the renderer only has to read one place.
         const normalised: ScanResponse = {
           status: body.status ?? response.status,
           data: body.data,
@@ -227,11 +221,6 @@ export default function Home() {
 
   return (
     <main className="flex flex-col h-full p-6 gap-6">
-      <header className="text-center">
-        <h1 className="text-2xl font-bold mb-4 text-white">
-          QR Attendance Checker
-        </h1>
-      </header>
 
       <div className="flex flex-col gap-4">
         <div>
@@ -241,7 +230,7 @@ export default function Home() {
           <select
             value={selectedEventId}
             onChange={(e) => setSelectedEventId(e.target.value)}
-            className="w-full px-4 py-2 bg-gray-700 text-white border border-gray-500 rounded focus:outline-none focus:border-yellow-400"
+            className="w-full px-4 py-2 bg-black text-white rounded focus:outline-none focus:border-yellow-400"
           >
             <option value="">-- Choose an event --</option>
             {activities.map((activity) => (
@@ -272,8 +261,10 @@ export default function Home() {
         )}
       </div>
 
-      <div className="flex-1 flex items-center justify-center bg-black rounded overflow-hidden">
-        <div id="qr-reader" style={{ width: "100%" }}></div>
+      <div className="flex-1 flex items-center justify-center">
+        <div className="w-full max-w-2xl aspect-square bg-black rounded overflow-hidden">
+          <div id="qr-reader" className="w-full h-full"></div>
+        </div>
       </div>
 
       {cameraError && (
