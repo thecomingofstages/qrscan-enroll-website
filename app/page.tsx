@@ -135,7 +135,12 @@ export default function Home() {
 
         await scanner.start(
           cameraConfig,
-          { fps: 10, qrbox: { width: 320, height: 320 }, aspectRatio: 1.0 },
+          {
+            fps: 15,
+            qrbox: { width: 320, height: 320 },
+            aspectRatio: 1.0,
+            disableFlip: false,
+          },
           onScanSuccess,
           () => {
             // Per-frame decode failure — keep the stream open.
@@ -172,17 +177,40 @@ export default function Home() {
   const onScanSuccess = useCallback(
     async (decodedText: string) => {
       if (scanInFlightRef.current) return;
+
+      // Validate that an event is selected
+      if (!selectedEventId) {
+        setScanResponse({
+          status: 400,
+          error: "ValidationError",
+          message: "No event selected",
+          details:
+            "Please select an event from the dropdown before scanning a QR code.",
+        });
+        return;
+      }
+
       scanInFlightRef.current = true;
       setSubmitting(true);
 
+      console.log("QR Code scanned:", {
+        decodedText,
+        selectedEventId,
+        isEventSelected: !!selectedEventId,
+      });
+
       try {
+        const payload = {
+          qr_token: decodedText,
+          event_id: selectedEventId,
+        };
+
+        console.log("Sending scan request:", payload);
+
         const response = await fetch("/api/scan", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            qr_token: decodedText,
-            event_id: selectedEventId,
-          }),
+          body: JSON.stringify(payload),
         });
 
         const body = (await response.json().catch(() => ({}))) as ScanResponse;
@@ -225,12 +253,14 @@ export default function Home() {
       <div className="flex flex-col gap-4">
         <div>
           <label className="block text-sm font-semibold text-yellow-400 mb-2">
-            Select Event
+            Select Event {!selectedEventId && <span className="text-red-400">*</span>}
           </label>
           <select
             value={selectedEventId}
             onChange={(e) => setSelectedEventId(e.target.value)}
-            className="w-full px-4 py-2 bg-black text-white rounded focus:outline-none focus:border-yellow-400"
+            className={`w-full px-4 py-2 bg-black text-white rounded focus:outline-none focus:border-yellow-400 ${
+              !selectedEventId ? "border-2 border-red-400" : ""
+            }`}
           >
             <option value="">-- Choose an event --</option>
             {activities.map((activity) => (
@@ -239,6 +269,9 @@ export default function Home() {
               </option>
             ))}
           </select>
+          {!selectedEventId && (
+            <p className="text-xs text-red-400 mt-1">Please select an event before scanning</p>
+          )}
         </div>
 
         {cameras.length > 1 && (
