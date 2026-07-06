@@ -1,12 +1,27 @@
+import { createHmac } from "node:crypto";
 import type { NextRequest } from "next/server";
 
 const BASE_URL = process.env.BASE_URL;
-const API_TOKEN =
+
+// Static bearer token — used as-is if set. Several names are accepted so the
+// operator can pick whichever convention they prefer.
+const STATIC_API_TOKEN =
   process.env.API_TOKEN ??
   process.env.ADMIN_TOKEN ??
   process.env.BEARER_TOKEN ??
   process.env.SCAN_TOKEN ??
   process.env.SCAN_API_TOKEN;
+
+// Credentials for minting a short-lived admin JWT on demand. The upstream
+// authenticates /events/scan with HS256 access tokens signed by the matching
+// `JWT_ACCESS_SECRET` (the qrscan .env carries the same secret as the API
+// deploy), and it looks up the user by `sub`, requiring `role === 'admin'`.
+// `SCAN_ADMIN_SUB` must be the `_id` of a real user in the upstream MongoDB
+// whose `role` is set to `'admin'`.
+const JWT_ACCESS_SECRET = process.env.JWT_ACCESS_SECRET;
+const SCAN_ADMIN_SUB = process.env.SCAN_ADMIN_SUB;
+const SCAN_ADMIN_NICKNAME = process.env.SCAN_ADMIN_NICKNAME ?? "Scanner";
+const SCAN_TOKEN_TTL_SECONDS = 15 * 60; // 15 minutes — matches the upstream's access-token expiry.
 
 if (!BASE_URL) {
   // Surfaced once at module load — easier to spot in dev logs than per-request.
@@ -15,9 +30,10 @@ if (!BASE_URL) {
   );
 }
 
-if (!API_TOKEN) {
+const hasJwtCredentials = Boolean(JWT_ACCESS_SECRET && SCAN_ADMIN_SUB);
+if (!hasJwtCredentials && !STATIC_API_TOKEN) {
   console.warn(
-    "[scan route] API token is not set. Set API_TOKEN or ADMIN_TOKEN in .env.local.",
+    "[scan route] No auth configured. Set SCAN_ADMIN_SUB + JWT_ACCESS_SECRET, or a static API_TOKEN, in .env.local.",
   );
 }
 
@@ -46,6 +62,57 @@ type UpstreamErrorBody = {
   [key: string]: unknown;
 };
 
+function base64url(input: Buffer | string): string {
+  const buf = typeof input === "string" ? Buffer.from(input, "utf8") : input;
+  return buf
+    .toString("base64")
+    .replace(/=+$/g, "")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_");
+}
+
+/**
+ * Mint a short-lived HS256 access token with the same shape the upstream's
+ * `signAccess(payload)` produces: `{ sub, nickname, role: 'admin' }` plus
+ * standard `iat`/`exp` claims.
+ *
+ * Pure Node `crypto` — keeps the project dependency-free.
+ */
+function mintAdminAccessToken(): string {
+  if (!JWT_ACCESS_SECRET || !SCAN_ADMIN_SUB) {
+    throw new Error("JWT_ACCESS_SECRET and SCAN_ADMIN_SUB are required to mint an admin token.");
+  }
+  const now = Math.floor(Date.now() / 1000);
+  const header = { alg: "HS256", typ: "JWT" };
+  const payload = {
+    sub: SCAN_ADMIN_SUB,
+    nickname: SCAN_ADMIN_NICKNAME,
+    role: "admin" as const,
+    iat: now,
+    exp: now + SCAN_TOKEN_TTL_SECONDS,
+  };
+  const headerEncoded = base64url(JSON.stringify(header));
+  const payloadEncoded = base64url(JSON.stringify(payload));
+  const signingInput = `${headerEncoded}.${payloadEncoded}`;
+  const signature = createHmac("sha256", JWT_ACCESS_SECRET)
+    .update(signingInput)
+    .digest();
+  return `${signingInput}.${base64url(signature)}`;
+}
+
+function resolveBearerToken(): string | null {
+  if (STATIC_API_TOKEN) return STATIC_API_TOKEN;
+  if (hasJwtCredentials) {
+    try {
+      return mintAdminAccessToken();
+    } catch (error) {
+      console.error("[scan route] Failed to mint admin token:", error);
+      return null;
+    }
+  }
+  return null;
+}
+
 export async function POST(request: NextRequest) {
   if (!BASE_URL) {
     return Response.json(
@@ -58,13 +125,14 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  if (!API_TOKEN) {
+  const bearerToken = resolveBearerToken();
+  if (!bearerToken) {
     return Response.json(
       {
         status: 500,
         error: "ConfigurationError",
         details:
-          "API token is not configured on the server. Set API_TOKEN, ADMIN_TOKEN, BEARER_TOKEN, SCAN_TOKEN, or SCAN_API_TOKEN in .env.local.",
+          "Server auth is not configured. Set SCAN_ADMIN_SUB + JWT_ACCESS_SECRET (or API_TOKEN) in .env.local.",
       },
       { status: 500 },
     );
@@ -106,7 +174,7 @@ export async function POST(request: NextRequest) {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        ...(API_TOKEN ? { Authorization: `Bearer ${API_TOKEN}` } : {}),
+        Authorization: `Bearer ${bearerToken}`,
       },
       body: JSON.stringify({ qr_token, event_id }),
       // Don't let Next.js cache upstream responses.
