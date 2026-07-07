@@ -99,7 +99,7 @@ export default function Home() {
         const data = (await response.json()) as Activity[];
         setActivities(data);
         if (data.length > 0) {
-          setSelectedEventId(data[0].event_id);
+          selectedEventIdRef.current = "";
         }
       } catch (error) {
         console.error("Error loading events:", error);
@@ -322,6 +322,11 @@ export default function Home() {
     }
   }, [decodedText]);
 
+  const handleEventChange = useCallback((nextValue: string) => {
+    setSelectedEventId(nextValue);
+    selectedEventIdRef.current = nextValue;
+  }, []);
+
   const userFields = scanResponse?.data?.user;
   const isSuccess =
     !!scanResponse && scanResponse.status >= 200 && scanResponse.status < 300;
@@ -336,7 +341,7 @@ export default function Home() {
           </label>
           <select
             value={selectedEventId}
-            onChange={(e) => setSelectedEventId(e.target.value)}
+            onChange={(e) => handleEventChange(e.target.value)}
             className="w-full px-4 py-2 bg-black text-white rounded focus:outline-none focus:border-yellow-400"
           >
             <option value="">Stamp Exchange</option>
