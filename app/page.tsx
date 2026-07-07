@@ -228,7 +228,22 @@ export default function Home() {
           body: JSON.stringify(payload),
         });
 
-        const body = (await response.json().catch(() => ({}))) as ScanResponse;
+        const body = (await response.json().catch(() => ({}))) as ScanResponse & {
+          data?: unknown;
+        };
+        const nestedData = body.data as
+          | ({ data?: unknown; success?: boolean } | undefined)
+          | null;
+        const normalisedData =
+          nestedData && typeof nestedData === "object" && "data" in nestedData
+            ? (nestedData as { data?: ScanData }).data
+            : (body.data as ScanData | undefined);
+
+        const typedData: ScanData & Record<string, unknown> | undefined =
+          normalisedData
+            ? ({ ...normalisedData } as ScanData & Record<string, unknown>)
+            : undefined;
+
         const safeMessage =
           typeof body.message === "string"
             ? body.message
@@ -243,7 +258,7 @@ export default function Home() {
             : undefined;
         const normalised: ScanResponse = {
           status: body.status ?? response.status,
-          data: body.data,
+          data: typedData,
           error: safeError,
           message: safeMessage,
           details: body.details,

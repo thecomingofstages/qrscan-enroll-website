@@ -208,8 +208,13 @@ export async function POST(request: NextRequest) {
   }
 
   if (upstream.ok) {
+    const payload =
+      parsed && typeof parsed === "object" && parsed !== null && "data" in parsed
+        ? (parsed as { data?: unknown }).data
+        : parsed;
+
     return Response.json(
-      { status: upstream.status, data: parsed },
+      { status: upstream.status, data: payload },
       { status: upstream.status },
     );
   }
