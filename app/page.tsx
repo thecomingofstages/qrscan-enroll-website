@@ -212,9 +212,10 @@ export default function Home() {
       });
 
       try {
+        const hasEventSelection = selectedEventIdRef.current !== "";
         const payload = {
           qr_token: decodedText,
-          ...(selectedEventIdRef.current
+          ...(hasEventSelection
             ? { event_id: selectedEventIdRef.current }
             : {}),
         };
@@ -338,16 +339,13 @@ export default function Home() {
             onChange={(e) => setSelectedEventId(e.target.value)}
             className="w-full px-4 py-2 bg-black text-white rounded focus:outline-none focus:border-yellow-400"
           >
-            <option value="">-- Choose an event --</option>
+            <option value="">Stamp Exchange</option>
             {activities.map((activity) => (
               <option key={activity.event_id} value={activity.event_id}>
                 {activity.activity_name}
               </option>
             ))}
           </select>
-          <p className="text-xs text-slate-400 mt-1">
-            Leave empty for stamp-only mode.
-          </p>
         </div>
 
         {cameras.length > 1 && (
@@ -438,34 +436,49 @@ function SuccessView({
   exchangeError: string | null;
 }) {
   const user = (result.user as Record<string, unknown> | undefined) ?? {};
-  const displayedItems = [
-    result.registration_id
-      ? { label: "Registration ID", value: result.registration_id }
-      : null,
-    typeof user.full_name === "string" && user.full_name
-      ? { label: "Name", value: user.full_name }
-      : null,
-    typeof user.nickname === "string" && user.nickname
-      ? { label: "Nickname", value: user.nickname }
-      : null,
-    typeof user.phone === "string" && user.phone
-      ? { label: "Phone", value: user.phone }
-      : null,
-    result.checked_in_at
-      ? { label: "Checked In Time", value: result.checked_in_at }
-      : null,
-    result.stamps !== undefined
-      ? { label: "Stamps", value: formatValue(result.stamps) }
-      : null,
-    typeof result.is_exchanged === "boolean"
-      ? { label: "Exchanged", value: result.is_exchanged ? "Yes" : "No" }
-      : null,
-  ].filter(Boolean) as Array<{ label: string; value: unknown }>;
+  const isStampMode =
+    !result.registration_id && !result.checked_in_at && !result.status;
+
+  const displayedItems = isStampMode
+    ? [
+        typeof user.full_name === "string" && user.full_name
+          ? { label: "Name", value: user.full_name }
+          : null,
+        typeof user.nickname === "string" && user.nickname
+          ? { label: "Nickname", value: user.nickname }
+          : null,
+        typeof user.phone === "string" && user.phone
+          ? { label: "Phone", value: user.phone }
+          : null,
+        result.stamps !== undefined
+          ? { label: "Stamps", value: formatValue(result.stamps) }
+          : null,
+        typeof result.is_exchanged === "boolean"
+          ? { label: "Exchanged", value: result.is_exchanged ? "Yes" : "No" }
+          : null,
+      ].filter(Boolean) as Array<{ label: string; value: unknown }>
+    : [
+        result.registration_id
+          ? { label: "Registration ID", value: result.registration_id }
+          : null,
+        typeof user.full_name === "string" && user.full_name
+          ? { label: "Name", value: user.full_name }
+          : null,
+        typeof user.nickname === "string" && user.nickname
+          ? { label: "Nickname", value: user.nickname }
+          : null,
+        typeof user.phone === "string" && user.phone
+          ? { label: "Phone", value: user.phone }
+          : null,
+        result.checked_in_at
+          ? { label: "Checked In Time", value: result.checked_in_at }
+          : null,
+      ].filter(Boolean) as Array<{ label: string; value: unknown }>;
 
   return (
     <div>
       <p className="font-semibold mb-3 text-lg">
-        {result.registration_id ? "Checked In" : "Scan accepted"}
+        {isStampMode ? "Stamp Exchange" : "Checked In"}
       </p>
       <div className="space-y-2 text-sm">
         {displayedItems.map((item) => (
