@@ -326,7 +326,7 @@ export default function Home() {
     !!scanResponse && scanResponse.status >= 200 && scanResponse.status < 300;
 
   return (
-    <main className="flex flex-col min-h-dvh max-h-dvh overflow-hidden p-3 gap-3 sm:p-6 sm:gap-6">
+    <main className="flex flex-col min-h-dvh overflow-y-auto p-3 gap-3 sm:p-6 sm:gap-6">
 
       <div className="flex flex-col gap-4">
         <div>
@@ -370,8 +370,8 @@ export default function Home() {
         )}
       </div>
 
-      <div className="flex-1 min-h-0 flex items-center justify-center">
-        <div className="w-full max-w-2xl aspect-square bg-black rounded overflow-hidden">
+      <div className="flex-shrink-0 flex items-center justify-center">
+        <div className="w-full max-w-[420px] aspect-square bg-black rounded overflow-hidden">
           <div id="qr-reader" className="w-full h-full"></div>
         </div>
       </div>
@@ -439,16 +439,34 @@ function SuccessView({
 }) {
   const user = (result.user as Record<string, unknown> | undefined) ?? {};
   const displayedItems = [
-    { label: "Registration ID", value: result.registration_id },
-    { label: "Name", value: user.full_name },
-    { label: "Nickname", value: user.nickname },
-    { label: "Phone", value: user.phone },
-    { label: "Checked In Time", value: result.checked_in_at },
-  ];
+    result.registration_id
+      ? { label: "Registration ID", value: result.registration_id }
+      : null,
+    typeof user.full_name === "string" && user.full_name
+      ? { label: "Name", value: user.full_name }
+      : null,
+    typeof user.nickname === "string" && user.nickname
+      ? { label: "Nickname", value: user.nickname }
+      : null,
+    typeof user.phone === "string" && user.phone
+      ? { label: "Phone", value: user.phone }
+      : null,
+    result.checked_in_at
+      ? { label: "Checked In Time", value: result.checked_in_at }
+      : null,
+    result.stamps !== undefined
+      ? { label: "Stamps", value: formatValue(result.stamps) }
+      : null,
+    typeof result.is_exchanged === "boolean"
+      ? { label: "Exchanged", value: result.is_exchanged ? "Yes" : "No" }
+      : null,
+  ].filter(Boolean) as Array<{ label: string; value: unknown }>;
 
   return (
     <div>
-      <p className="font-semibold mb-3 text-lg">Checked In</p>
+      <p className="font-semibold mb-3 text-lg">
+        {result.registration_id ? "Checked In" : "Scan accepted"}
+      </p>
       <div className="space-y-2 text-sm">
         {displayedItems.map((item) => (
           <div key={item.label} className="flex items-start gap-3 rounded bg-black/20 p-2">
@@ -481,13 +499,22 @@ function SuccessView({
 }
 
 function ErrorView({ response }: { response: ScanResponse }) {
+  const parsedError = parseErrorPayload(response);
+
   return (
-    <div className="text-center">
+    <div className="text-left">
       <p className="font-semibold text-lg">Scan failed</p>
-      <p className="text-sm text-gray-100 mt-2">
-        Message: {response.message ?? response.error ?? "Request failed"}
-      </p>
-      <p className="text-sm text-gray-200 mt-1">Status: {response.status}</p>
+      <div className="mt-3 rounded bg-black/20 p-3 text-sm">
+        <p className="font-semibold text-red-100">
+          {parsedError.code ? `Code: ${parsedError.code}` : "Request failed"}
+        </p>
+        <p className="mt-1 text-gray-100">
+          {parsedError.message ?? response.message ?? response.error ?? "Request failed"}
+        </p>
+        <p className="mt-2 text-xs uppercase tracking-wide text-gray-300">
+          Status {response.status}
+        </p>
+      </div>
       {response.details !== undefined && response.details !== null && (
         <pre className="text-xs text-gray-100 mt-3 text-left whitespace-pre-wrap wrap-break-word">
           {formatValue(response.details)}
@@ -495,6 +522,33 @@ function ErrorView({ response }: { response: ScanResponse }) {
       )}
     </div>
   );
+}
+
+function parseErrorPayload(response: ScanResponse): {
+  code?: string;
+  message?: string;
+} {
+  const candidate = response.message ?? response.error ?? response.details;
+  if (typeof candidate !== "string") return {};
+
+  try {
+    const parsed = JSON.parse(candidate);
+    if (parsed && typeof parsed === "object") {
+      const code =
+        typeof (parsed as { code?: unknown }).code === "string"
+          ? (parsed as { code?: string }).code
+          : undefined;
+      const message =
+        typeof (parsed as { message?: unknown }).message === "string"
+          ? (parsed as { message?: string }).message
+          : undefined;
+      return { code, message };
+    }
+  } catch {
+    // fall back to plain text rendering below
+  }
+
+  return {};
 }
 
 function formatValue(value: unknown): string {
