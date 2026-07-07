@@ -8,9 +8,20 @@ interface Activity {
   activity_name: string;
 }
 
+interface ScanData {
+  registration_id?: string;
+  status?: string;
+  checked_in_at?: string;
+  user?: Record<string, unknown>;
+  activity_name?: string;
+  date_key?: string;
+  stamps?: unknown[];
+  is_exchanged?: boolean;
+}
+
 interface ScanResponse {
   status: number;
-  data?: { user?: Record<string, unknown> } & Record<string, unknown>;
+  data?: ScanData & Record<string, unknown>;
   error?: string;
   message?: string;
   details?: unknown;
@@ -63,10 +74,19 @@ export default function Home() {
   const [scanResponse, setScanResponse] =
     useState<ScanResponse | null>(null);
   const [decodedText, setDecodedText] = useState<string | null>(null);
+  const [exchangePending, setExchangePending] = useState(false);
+  const [exchangeMessage, setExchangeMessage] = useState<string | null>(null);
+  const [exchangeError, setExchangeError] = useState<string | null>(null);
 
   // Tracks whether a scan is currently in flight so the QR callback can be a
   // no-op until the cooldown / restart completes.
   const scanInFlightRef = useRef(false);
+
+  const selectedEventIdRef = useRef(selectedEventId);
+
+  useEffect(() => {
+    selectedEventIdRef.current = selectedEventId;
+  }, [selectedEventId]);
 
   // Load the local event list once on mount.
   useEffect(() => {
@@ -179,32 +199,24 @@ export default function Home() {
     async (decodedText: string) => {
       if (scanInFlightRef.current) return;
 
-      // Validate that an event is selected
-      if (!selectedEventId) {
-        setScanResponse({
-          status: 400,
-          error: "ValidationError",
-          message: "No event selected",
-          details:
-            "Please select an event from the dropdown before scanning a QR code.",
-        });
-        return;
-      }
-
       setDecodedText(decodedText);
+      setExchangeMessage(null);
+      setExchangeError(null);
       scanInFlightRef.current = true;
       setSubmitting(true);
 
       console.log("QR Code scanned:", {
         decodedText,
-        selectedEventId,
-        isEventSelected: !!selectedEventId,
+        selectedEventId: selectedEventIdRef.current,
+        isEventSelected: !!selectedEventIdRef.current,
       });
 
       try {
         const payload = {
           qr_token: decodedText,
-          event_id: selectedEventId,
+          ...(selectedEventIdRef.current
+            ? { event_id: selectedEventIdRef.current }
+            : {}),
         };
 
         console.log("Sending scan request:", payload);
@@ -254,27 +266,77 @@ export default function Home() {
         }, RESCAN_COOLDOWN_MS);
       }
     },
-    [selectedEventId],
+    [],
   );
+
+  const handleMarkExchanged = useCallback(async () => {
+    if (!decodedText) return;
+
+    setExchangePending(true);
+    setExchangeError(null);
+    setExchangeMessage(null);
+
+    try {
+      const response = await fetch("/api/mark-exchanged", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ qr_token: decodedText }),
+      });
+
+      const body = (await response.json().catch(() => ({}))) as {
+        message?: unknown;
+        error?: unknown;
+      };
+
+      if (!response.ok) {
+        const message =
+          typeof body.message === "string"
+            ? body.message
+            : typeof body.error === "string"
+            ? body.error
+            : "Unable to mark the stamp as exchanged.";
+        throw new Error(message);
+      }
+
+      setExchangeMessage("Done");
+      setScanResponse((current) =>
+        current
+          ? {
+              ...current,
+              data: {
+                ...(current.data ?? {}),
+                is_exchanged: true,
+              },
+            }
+          : current,
+      );
+    } catch (error) {
+      setExchangeError(
+        error instanceof Error
+          ? error.message
+          : "Unable to mark the stamp as exchanged.",
+      );
+    } finally {
+      setExchangePending(false);
+    }
+  }, [decodedText]);
 
   const userFields = scanResponse?.data?.user;
   const isSuccess =
     !!scanResponse && scanResponse.status >= 200 && scanResponse.status < 300;
 
   return (
-    <main className="flex flex-col h-full p-6 gap-6">
+    <main className="flex flex-col min-h-dvh max-h-dvh overflow-hidden p-3 gap-3 sm:p-6 sm:gap-6">
 
       <div className="flex flex-col gap-4">
         <div>
           <label className="block text-sm font-semibold text-yellow-400 mb-2">
-            Select Event {!selectedEventId && <span className="text-red-400">*</span>}
+            Select Event
           </label>
           <select
             value={selectedEventId}
             onChange={(e) => setSelectedEventId(e.target.value)}
-            className={`w-full px-4 py-2 bg-black text-white rounded focus:outline-none focus:border-yellow-400 ${
-              !selectedEventId ? "border-2 border-red-400" : ""
-            }`}
+            className="w-full px-4 py-2 bg-black text-white rounded focus:outline-none focus:border-yellow-400"
           >
             <option value="">-- Choose an event --</option>
             {activities.map((activity) => (
@@ -283,9 +345,9 @@ export default function Home() {
               </option>
             ))}
           </select>
-          {!selectedEventId && (
-            <p className="text-xs text-red-400 mt-1">Please select an event before scanning</p>
-          )}
+          <p className="text-xs text-slate-400 mt-1">
+            Leave empty for stamp-only mode.
+          </p>
         </div>
 
         {cameras.length > 1 && (
@@ -308,7 +370,7 @@ export default function Home() {
         )}
       </div>
 
-      <div className="flex-1 flex items-center justify-center">
+      <div className="flex-1 min-h-0 flex items-center justify-center">
         <div className="w-full max-w-2xl aspect-square bg-black rounded overflow-hidden">
           <div id="qr-reader" className="w-full h-full"></div>
         </div>
@@ -347,8 +409,11 @@ export default function Home() {
         >
           {isSuccess ? (
             <SuccessView
-              user={userFields ?? {}}
-              raw={scanResponse.data ?? {}}
+              result={scanResponse.data ?? {}}
+              onMarkExchanged={handleMarkExchanged}
+              exchangePending={exchangePending}
+              exchangeMessage={exchangeMessage}
+              exchangeError={exchangeError}
             />
           ) : (
             <ErrorView response={scanResponse} />
@@ -360,27 +425,57 @@ export default function Home() {
 }
 
 function SuccessView({
-  user,
-  raw,
+  result,
+  onMarkExchanged,
+  exchangePending,
+  exchangeMessage,
+  exchangeError,
 }: {
-  user: Record<string, unknown>;
-  raw: Record<string, unknown>;
+  result: ScanData & Record<string, unknown>;
+  onMarkExchanged: () => void;
+  exchangePending: boolean;
+  exchangeMessage: string | null;
+  exchangeError: string | null;
 }) {
-  // Prefer the `user` object; if the upstream didn't nest it under `user`,
-  // fall back to the whole payload so the operator still sees something.
-  const fields = Object.keys(user).length > 0 ? user : raw;
+  const user = (result.user as Record<string, unknown> | undefined) ?? {};
+  const displayedItems = [
+    { label: "Registration ID", value: result.registration_id },
+    { label: "Name", value: user.full_name },
+    { label: "Nickname", value: user.nickname },
+    { label: "Phone", value: user.phone },
+    { label: "Checked In Time", value: result.checked_in_at },
+  ];
 
   return (
     <div>
-      <p className="font-semibold mb-2">Scan accepted</p>
-      <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-sm">
-        {Object.entries(fields).map(([key, value]) => (
-          <div key={key} className="contents">
-            <dt className="text-gray-200">{key}</dt>
-            <dd className="text-white wrap-break-word">{formatValue(value)}</dd>
+      <p className="font-semibold mb-3 text-lg">Checked In</p>
+      <div className="space-y-2 text-sm">
+        {displayedItems.map((item) => (
+          <div key={item.label} className="flex items-start gap-3 rounded bg-black/20 p-2">
+            <span className="w-32 shrink-0 text-gray-200">{item.label}</span>
+            <span className="text-white break-all">{formatValue(item.value)}</span>
           </div>
         ))}
-      </dl>
+      </div>
+
+      {!result.is_exchanged && (
+        <div className="mt-4 border-t border-white/15 pt-3">
+          <button
+            type="button"
+            onClick={onMarkExchanged}
+            disabled={exchangePending}
+            className="rounded bg-yellow-500 px-3 py-2 text-sm font-semibold text-black disabled:opacity-60"
+          >
+            {exchangePending ? "Updating..." : "Mark exchanged"}
+          </button>
+          {exchangeMessage && (
+            <p className="mt-2 text-sm text-green-200">{exchangeMessage}</p>
+          )}
+          {exchangeError && (
+            <p className="mt-2 text-sm text-red-100">{exchangeError}</p>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -388,14 +483,13 @@ function SuccessView({
 function ErrorView({ response }: { response: ScanResponse }) {
   return (
     <div className="text-center">
-      <p className="font-semibold">
-        Error {response.status} — {response.error ?? "Request failed"}
+      <p className="font-semibold text-lg">Scan failed</p>
+      <p className="text-sm text-gray-100 mt-2">
+        Message: {response.message ?? response.error ?? "Request failed"}
       </p>
-      {response.message && typeof response.message === "string" && (
-        <p className="text-sm text-gray-200 mt-1">{response.message}</p>
-      )}
+      <p className="text-sm text-gray-200 mt-1">Status: {response.status}</p>
       {response.details !== undefined && response.details !== null && (
-        <pre className="text-xs text-gray-100 mt-2 text-left whitespace-pre-wrap wrap-break-word">
+        <pre className="text-xs text-gray-100 mt-3 text-left whitespace-pre-wrap wrap-break-word">
           {formatValue(response.details)}
         </pre>
       )}

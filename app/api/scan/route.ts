@@ -146,7 +146,7 @@ export async function POST(request: NextRequest) {
       {
         status: 400,
         error: "BadRequest",
-        details: "Request body must be valid JSON with qr_token and event_id.",
+        details: "Request body must be valid JSON with qr_token and an optional event_id.",
       },
       { status: 400 },
     );
@@ -157,12 +157,12 @@ export async function POST(request: NextRequest) {
   const event_id =
     typeof body.event_id === "string" ? body.event_id.trim() : "";
 
-  if (!qr_token || !event_id) {
+  if (!qr_token) {
     return Response.json(
       {
         status: 400,
         error: "ValidationError",
-        details: "Both qr_token and event_id are required.",
+        details: "qr_token is required.",
       },
       { status: 400 },
     );
@@ -170,13 +170,18 @@ export async function POST(request: NextRequest) {
 
   let upstream: Response;
   try {
+    const upstreamBody = { qr_token } as { qr_token: string; event_id?: string };
+    if (event_id) {
+      upstreamBody.event_id = event_id;
+    }
+
     upstream = await fetch(`${BASE_URL}/events/scan`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${bearerToken}`,
       },
-      body: JSON.stringify({ qr_token, event_id }),
+      body: JSON.stringify(upstreamBody),
       // Don't let Next.js cache upstream responses.
       cache: "no-store",
     });
