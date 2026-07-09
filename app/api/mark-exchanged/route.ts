@@ -1,3 +1,4 @@
+import { createHmac } from "node:crypto";
 import type { NextRequest } from "next/server";
 
 const BASE_URL = process.env.BASE_URL;
@@ -7,6 +8,62 @@ const STATIC_API_TOKEN =
   process.env.BEARER_TOKEN ??
   process.env.SCAN_TOKEN ??
   process.env.SCAN_API_TOKEN;
+
+const JWT_ACCESS_SECRET = process.env.JWT_ACCESS_SECRET;
+const SCAN_ADMIN_SUB = process.env.SCAN_ADMIN_SUB;
+const SCAN_ADMIN_NICKNAME = process.env.SCAN_ADMIN_NICKNAME ?? "Scanner";
+const SCAN_TOKEN_TTL_SECONDS = 15 * 60;
+
+function base64url(input: Buffer | string): string {
+  const buf = typeof input === "string" ? Buffer.from(input, "utf8") : input;
+  return buf
+    .toString("base64")
+    .replace(/=+$/g, "")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_");
+}
+
+function mintAdminAccessToken(): string {
+  if (!JWT_ACCESS_SECRET || !SCAN_ADMIN_SUB) {
+    throw new Error("JWT_ACCESS_SECRET and SCAN_ADMIN_SUB are required to mint an admin token.");
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+  const header = { alg: "HS256", typ: "JWT" };
+  const payload = {
+    sub: SCAN_ADMIN_SUB,
+    nickname: SCAN_ADMIN_NICKNAME,
+    role: "admin" as const,
+    iat: now,
+    exp: now + SCAN_TOKEN_TTL_SECONDS,
+  };
+
+  const headerEncoded = base64url(JSON.stringify(header));
+  const payloadEncoded = base64url(JSON.stringify(payload));
+  const signingInput = `${headerEncoded}.${payloadEncoded}`;
+  const signature = createHmac("sha256", JWT_ACCESS_SECRET)
+    .update(signingInput)
+    .digest();
+
+  return `${signingInput}.${base64url(signature)}`;
+}
+
+function resolveBearerToken(): string | null {
+  if (JWT_ACCESS_SECRET && SCAN_ADMIN_SUB) {
+    try {
+      return mintAdminAccessToken();
+    } catch (error) {
+      console.error("[mark-exchanged route] Failed to mint admin token:", error);
+      return null;
+    }
+  }
+
+  if (STATIC_API_TOKEN) {
+    return STATIC_API_TOKEN;
+  }
+
+  return null;
+}
 
 function extractUserIdFromQrToken(qrToken: string): string | null {
   const [encoded] = qrToken.split(".");
@@ -28,9 +85,15 @@ export async function PATCH(request: NextRequest) {
     );
   }
 
-  if (!STATIC_API_TOKEN) {
+  const bearerToken = resolveBearerToken();
+  if (!bearerToken) {
     return Response.json(
-      { status: 500, error: "ConfigurationError", details: "API token is not configured on the server." },
+      {
+        status: 500,
+        error: "ConfigurationError",
+        details:
+          "Server auth is not configured. Set SCAN_ADMIN_SUB + JWT_ACCESS_SECRET (or API_TOKEN) in .env.local.",
+      },
       { status: 500 },
     );
   }
@@ -66,7 +129,7 @@ export async function PATCH(request: NextRequest) {
       method: "PATCH",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${STATIC_API_TOKEN}`,
+        Authorization: `Bearer ${bearerToken}`,
       },
       body: JSON.stringify({ user_id: userId }),
       cache: "no-store",

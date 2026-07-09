@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, Fragment } from "react";
 import { Html5Qrcode, Html5QrcodeScannerState } from "html5-qrcode";
 
 interface Activity {
@@ -352,12 +352,12 @@ export default function Home() {
       <div className="flex flex-col gap-4">
         <div>
           <label className="block text-sm font-semibold text-yellow-400 mb-2">
-            Select Event
+            Event
           </label>
           <select
             value={selectedEventId}
             onChange={(e) => handleEventChange(e.target.value)}
-            className="w-full px-4 py-2 bg-black text-white rounded focus:outline-none focus:border-yellow-400"
+            className="w-full px-4 py-2 bg-gray-900 text-white border border-gray-500 rounded focus:outline-none focus:border-yellow-400"
           >
             <option value="">Stamp Exchange</option>
             {activities.map((activity) => (
@@ -376,7 +376,7 @@ export default function Home() {
             <select
               value={selectedCameraId}
               onChange={(e) => setSelectedCameraId(e.target.value)}
-              className="w-full px-4 py-2 bg-gray-700 text-white border border-gray-500 rounded focus:outline-none focus:border-yellow-400"
+              className="w-full px-4 py-2 bg-gray-900 text-white border border-gray-500 rounded focus:outline-none focus:border-yellow-400"
             >
               {cameras.map((camera) => (
                 <option key={camera.id} value={camera.id}>
@@ -401,21 +401,14 @@ export default function Home() {
       )}
 
       {!cameraReady && !cameraError && (
-        <div className="p-4 rounded bg-gray-700 text-white text-center">
+        <div className="p-4 rounded bg-gray-900 text-white text-center">
           <p>Opening camera…</p>
         </div>
       )}
 
       {submitting && (
-        <div className="p-4 rounded bg-gray-700 text-white text-center">
+        <div className="p-4 rounded bg-gray-900 text-white text-center">
           <p>Submitting scan…</p>
-        </div>
-      )}
-
-      {decodedText && (
-        <div className="p-4 rounded bg-slate-800 text-slate-100 text-sm">
-          <p className="font-semibold">Detected QR content</p>
-          <p className="mt-1 wrap-break-word">{decodedText}</p>
         </div>
       )}
 
@@ -436,6 +429,12 @@ export default function Home() {
           ) : (
             <ErrorView response={scanResponse} />
           )}
+        </div>
+      )}
+      {decodedText && (
+        <div className="p-4 rounded bg-gray-900 text-slate-100 text-sm">
+          <p className="font-semibold">Detected QR content</p>
+          <p className="mt-1 wrap-break-word text-gray-400 font-mono">{decodedText}</p>
         </div>
       )}
     </main>
@@ -462,19 +461,19 @@ function SuccessView({
   const displayedItems = isStampMode
     ? [
         typeof user.full_name === "string" && user.full_name
-          ? { label: "Name", value: user.full_name }
+          ? { label: "ชื่อ", value: user.full_name }
           : null,
         typeof user.nickname === "string" && user.nickname
-          ? { label: "Nickname", value: user.nickname }
+          ? { label: "ชื่อเล่น", value: user.nickname }
           : null,
         typeof user.phone === "string" && user.phone
-          ? { label: "Phone", value: user.phone }
+          ? { label: "เบอร์โทรศัพท์", value: user.phone }
           : null,
         result.stamps !== undefined
-          ? { label: "Stamps", value: formatValue(result.stamps) }
+          ? { label: "ได้รับสแตมป์จาก", value: formatStampInfo(result.stamps) }
           : null,
         typeof result.is_exchanged === "boolean"
-          ? { label: "Exchanged", value: result.is_exchanged ? "Yes" : "No" }
+          ? { label: "แลกของรางวัลยัง ?", value: result.is_exchanged ? "แลกแล้วคับ 🥹" : "ยัง" }
           : null,
       ].filter(Boolean) as Array<{ label: string; value: unknown }>
     : [
@@ -482,34 +481,40 @@ function SuccessView({
           ? { label: "Registration ID", value: result.registration_id }
           : null,
         typeof user.full_name === "string" && user.full_name
-          ? { label: "Name", value: user.full_name }
+          ? { label: "ชื่อ", value: user.full_name }
           : null,
         typeof user.nickname === "string" && user.nickname
-          ? { label: "Nickname", value: user.nickname }
+          ? { label: "ชื่อเล่น", value: user.nickname }
           : null,
         typeof user.phone === "string" && user.phone
-          ? { label: "Phone", value: user.phone }
+          ? { label: "เบอร์โทรศัพท์", value: user.phone }
           : null,
         result.checked_in_at
-          ? { label: "Checked In Time", value: result.checked_in_at }
+          ? { label: "เวลาเช็คชื่อ", value: formatThaiDateTime(result.checked_in_at) }
+          : null,
+        result.activity_name
+          ? { label: "กิจกรรม", value: result.activity_name }
           : null,
       ].filter(Boolean) as Array<{ label: string; value: unknown }>;
 
   return (
     <div>
+      <pre className="text-xs text-gray-100 text-left whitespace-pre-wrap wrap-break-word">
+        {isStampMode ? "STAMP EXCHANGE" : "ATTENDANCE CHECKED"}
+      </pre>
       <p className="font-semibold mb-3 text-lg">
-        {isStampMode ? "Stamp Exchange" : "Checked In"}
+        {isStampMode ? `สะสมสแตมป์แล้วจาก ${result.stamps?.length} ร้านค้า` : "ข้อมูลผู้เข้าร่วมกิจกรรม"}
       </p>
       <div className="space-y-2 text-sm">
         {displayedItems.map((item) => (
           <div key={item.label} className="flex items-start gap-3 rounded bg-black/20 p-2">
             <span className="w-32 shrink-0 text-gray-200">{item.label}</span>
-            <span className="text-white break-all">{formatValue(item.value)}</span>
+            <span className="text-white break-all" style={{whiteSpace: "pre-line"}}>{formatValue(item.value)}</span>
           </div>
         ))}
       </div>
 
-      {!result.is_exchanged && (
+      {!result.is_exchanged && isStampMode && (
         <div className="mt-4 border-t border-white/15 pt-3">
           <button
             type="button"
@@ -517,13 +522,13 @@ function SuccessView({
             disabled={exchangePending}
             className="rounded bg-yellow-500 px-3 py-2 text-sm font-semibold text-black disabled:opacity-60"
           >
-            {exchangePending ? "Updating..." : "Mark exchanged"}
+            {exchangePending ? "Updating..." : "บันทึกการแลกของรางวัล"}
           </button>
           {exchangeMessage && (
             <p className="mt-2 text-sm text-green-200">{exchangeMessage}</p>
           )}
           {exchangeError && (
-            <p className="mt-2 text-sm text-red-100">{exchangeError}</p>
+            <p className="mt-2 text-sm text-red-100">Error: {exchangeError}</p>
           )}
         </div>
       )}
@@ -536,23 +541,17 @@ function ErrorView({ response }: { response: ScanResponse }) {
 
   return (
     <div className="text-left">
-      <p className="font-semibold text-lg">Scan failed</p>
+      <pre className="text-xs text-gray-100 text-left whitespace-pre-wrap wrap-break-word">
+          ATTENDANCE NOT CHECKED
+      </pre>
+      <p className="font-semibold text-lg">
+        {parsedError.message ?? response.message ?? response.error ?? "Request failed"}
+      </p>
       <div className="mt-3 rounded bg-black/20 p-3 text-sm">
-        <p className="font-semibold text-red-100">
-          {parsedError.code ? `Code: ${parsedError.code}` : "Request failed"}
-        </p>
-        <p className="mt-1 text-gray-100">
-          {parsedError.message ?? response.message ?? response.error ?? "Request failed"}
-        </p>
-        <p className="mt-2 text-xs uppercase tracking-wide text-gray-300">
-          Status {response.status}
-        </p>
+      <pre className="text-xs text-gray-100 text-left whitespace-pre-wrap wrap-break-word">
+        {response.status}: {parsedError.code ? `${parsedError.code}` : "Request failed"}
+      </pre>
       </div>
-      {response.details !== undefined && response.details !== null && (
-        <pre className="text-xs text-gray-100 mt-3 text-left whitespace-pre-wrap wrap-break-word">
-          {formatValue(response.details)}
-        </pre>
-      )}
     </div>
   );
 }
@@ -584,6 +583,26 @@ function parseErrorPayload(response: ScanResponse): {
   return {};
 }
 
+function formatStampInfo(value: unknown): string {
+  if (!Array.isArray(value)) return "";
+
+  return value
+    .filter(
+      (item): item is { store_name: unknown; achieved_at: unknown } =>
+        typeof item === "object" && item !== null
+    )
+    .map((item) => {
+      const storeName =
+        typeof item.store_name === "string" ? item.store_name : "Unknown store";
+      const achievedAt =
+        typeof item.achieved_at === "string"
+          ? formatThaiDateTime(item.achieved_at)
+          : "";
+      return `• ${storeName} (เมื่อ ${achievedAt})`;
+    })
+    .join("\n");
+}
+
 function formatValue(value: unknown): string {
   if (value === null || value === undefined) return "—";
   if (typeof value === "string") return value;
@@ -595,4 +614,41 @@ function formatValue(value: unknown): string {
   } catch {
     return String(value);
   }
+}
+
+
+const THAI_MONTHS = [
+  "มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน",
+  "กรกฎาคม", "สิงหาคม", "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม",
+] as const;
+
+function formatThaiDateTime(isoString: string): string {
+  const date = new Date(isoString);
+
+  const formatter = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Bangkok",
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
+  });
+
+  const parts = formatter.formatToParts(date);
+  const map: Record<string, string> = {};
+  for (const part of parts) {
+    map[part.type] = part.value;
+  }
+
+  // hour12: false can return "24" for midnight in some environments; normalize to 0.
+  const hour = parseInt(map.hour, 10) % 24;
+  const minute = map.minute;
+  const second = map.second;
+  const day = parseInt(map.day, 10);
+  const month = parseInt(map.month, 10);
+  const buddhistYear = parseInt(map.year, 10) + 543;
+
+  return `${hour}:${minute}:${second} ${day} ${THAI_MONTHS[month - 1]} ${buddhistYear}`;
 }
